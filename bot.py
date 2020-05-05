@@ -15,7 +15,7 @@ def start(update: Update, context: CallbackContext):
 			text="Bienvenido de nuevo, {} ({}).\n" \
 			"Comandos disponibles:\n  /query consulta [limite] - Volcado del" \
 			"resultado de 'consulta' a un fichero.\n  /stream consulta " \
-			"[limite] - Suscripción a stream de 'consulta'\n  /list - Lista\"
+			"[limite] - Suscripción a stream de 'consulta'\n  /list - Lista" \
 			" de streams activos\n  /stop n - Parar stream n".format(
 				update.effective_user.first_name, 
 				update.effective_user.id))

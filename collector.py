@@ -62,11 +62,11 @@ class Collector(ABC):
 	def __del__(self):
 		OAuthKeys.release(self.credentials)
 
-	def query(self, q):
+	def query(self, q, limit=1000):
 		return True
 	
-	def dump(self, q, folder="dumps", postfix="standard"):
-		results = self.query(q)
+	def dump(self, q, limit=1000, folder="dumps", postfix="standard"):
+		results = self.query(q, limit=limit)
 		
 		filepath = "{}/{}_{}.{}.json".format(
 			folder, q, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -77,7 +77,7 @@ class Collector(ABC):
 
 class StandardAPI(Collector):
 	
-	def query(self, q, max_tweets=100):
+	def query(self, q, limit=1000):
 		results = list()
 
 		if q[0] == "@":
@@ -93,17 +93,24 @@ class StandardAPI(Collector):
 				self.api.search, q=q, tweet_mode="extended").pages():
 				for tweet in page:
 					results.append(tweet._json)
+
+					if limit != 0 and len(results) >= limit:
+						return results
 		
 		return results
 
 
 class StreamHandler(tweepy.StreamListener):
-	def __init__(self, api=None):
+	def __init__(self, api=None, limit=0):
 		self.results = list()
+		self.limit = limit
 		super().__init__(api=api)
 		
 	def on_status(self, status):
 		self.results.append(status._json)
+
+		if self.limit != 0 and len(self.results) >= self.limit:
+			return False
 		
 	def on_error(self, status_code):
 		if status_code == 420:
@@ -118,10 +125,10 @@ class StreamingAPI(Collector):
 		super().__init__()
 	
 	
-	def query(self, q):
+	def query(self, q, limit=0):
 		self.last_q = q
 		
-		self.streamer = StreamHandler()
+		self.streamer = StreamHandler(limit=limit)
 		self.stream = tweepy.Stream(auth=self.api.auth, listener=self.streamer)
 		
 		self.stream.filter(track=[q], is_async=True)

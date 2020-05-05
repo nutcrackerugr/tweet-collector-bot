@@ -1,5 +1,5 @@
-import telegram
-from telegram.ext import Updater, CommandHandler
+from telegram import Bot, ChatAction, Update
+from telegram.ext import Updater, CallbackContext, CommandHandler
 
 import collector
 import config
@@ -8,79 +8,91 @@ import logging
 
 streams = []
 
-def start(bot, update):
+def start(update: Update, context: CallbackContext):
 	if update.message.from_user.id in config.__LIST_OF_USERS__:
-		bot.send_message(
+		context.bot.send_message(
 			chat_id=update.effective_message.chat_id,
 			text="Bienvenido de nuevo, {} ({}).\n" \
-			"Comandos disponibles:\n  /query consulta - Volcado del resultado" \
-			"de 'consulta' a un fichero.\n  /stream consulta - Suscripción a " \
-			"stream de 'consulta'\n  /list - Lista de streams activos\n  " \
-			"/stop n - Parar stream n".format(
+			"Comandos disponibles:\n  /query consulta [limite] - Volcado del" \
+			"resultado de 'consulta' a un fichero.\n  /stream consulta " \
+			"[limite] - Suscripción a stream de 'consulta'\n  /list - Lista\"
+			" de streams activos\n  /stop n - Parar stream n".format(
 				update.effective_user.first_name, 
 				update.effective_user.id))
 
 
-def query(bot, update):
+def query(update: Update, context: CallbackContext):
 	if update.message.from_user.id in config.__LIST_OF_USERS__:
-		q = update.message.text.split(" ", maxsplit=1)
+		query = update.message.text.split(" ", maxsplit=2)
 		
 		# Check if query string is correctly formed
-		if len(q) == 2:
-			q = q[1]
+		if len(query) >= 2:
+			q = query[1]
+			limit = int(query[2]) if len(query) == 3 else None
 			
 			# Status message
-			bot.send_message(
+			context.bot.send_message(
 				chat_id=update.effective_message.chat_id,
-				text="Dumping '{}'...".format(q))
-			bot.send_chat_action(
+				text="Dumping from '{}'...".format(q))
+			context.bot.send_chat_action(
 				chat_id=update.effective_message.chat_id,
-				action=telegram.ChatAction.UPLOAD_DOCUMENT)
+				action=ChatAction.UPLOAD_DOCUMENT)
 			
 			try:
 				twitter = collector.StandardAPI()
-				twitter.dump(q)
+				if limit:
+					twitter.dump(q, limit=limit)
+				else:
+					twitter.dump(q)
 			except Exception as e:
-				bot.send_message(
+				context.bot.send_message(
 					chat_id=update.effective_message.chat_id,
 					text=str(e))
 			
-			bot.send_message(
+			context.bot.send_message(
 				chat_id=update.effective_message.chat_id,
 				text="Done dumping '{}'.".format(q))
 		else:
-			bot.send_message(
+			context.bot.send_message(
 				chat_id=update.effective_message.chat_id,
 				text="Malformed command")
 			
 
-def stream(bot, update):
+def stream(update: Update, context: CallbackContext):
 	if update.message.from_user.id in config.__LIST_OF_USERS__:
-		q = update.message.text.split(" ", maxsplit=1)
+		query = update.message.text.split(" ", maxsplit=2)
 		
-		if len(q) == 2:
-			q = q[1]
+		if len(query) >= 2:
+			q = query[1]
+
+			limit = int(query[2]) if len(query) == 3 else None
+
 		
 			try:
 				stream = collector.StreamingAPI()
-				stream.query(q)
+
+				if limit:
+					stream.query(q, limit=limit)
+				else:
+					stream.query(q)
+				
 				streams.append((q, stream))
-				bot.send_message(
+				context.bot.send_message(
 					chat_id=update.effective_message.chat_id,
 					text="Listening for '{}'...".format(q))
 				
 			except Exception as e:
-				bot.send_message(
+				context.bot.send_message(
 					chat_id=update.effective_message.chat_id,
 					text=str(e))
 			
 		else:
-			bot.send_message(
+			context.bot.send_message(
 				chat_id=update.effective_message.chat_id,
 				text="Malformed command")
 
 
-def list_streams(bot, update):
+def list_streams(update: Update, context: CallbackContext):
 	if update.message.from_user.id in config.__LIST_OF_USERS__:
 		response = "List of streams:\n"
 		
@@ -90,11 +102,11 @@ def list_streams(bot, update):
 			response += "  {}. {} with {} tweets.\n".format(
 				i, stream[0], len(stream[1].streamer.results))
 		
-		bot.send_message(
+		context.bot.send_message(
 			chat_id=update.effective_message.chat_id, text=response)
 
 
-def stop_stream(bot, update):
+def stop_stream(update: Update, context: CallbackContext):
 	if update.message.from_user.id in config.__LIST_OF_USERS__:
 		q = update.message.text.split(" ", maxsplit=1)
 		
@@ -104,18 +116,18 @@ def stop_stream(bot, update):
 				streams[n][1].disconnect()
 				streams[n][1].dump(streams[n][0])
 			
-				bot.send_message(
+				context.bot.send_message(
 					chat_id=update.effective_message.chat_id,
 					text="Done streaming '{}' with {} tweets.".format(
 						streams[n][0], len(streams[n][1].streamer.results)))
 				streams.pop(n)
 			else:
-				bot.send_message(
+				context.bot.send_message(
 					chat_id=update.effective_message.chat_id,
 					text="Invalid index")
 		
 		else:
-			bot.send_message(
+			context.bot.send_message(
 				chat_id=update.effective_message.chat_id,
 				text="Malformed command")
 	
@@ -127,10 +139,10 @@ if __name__ == "__main__":
 	
 	collector.OAuthKeys.from_file("credentials.txt")
 	
-	bot = telegram.Bot(token=config.__TOKEN__)
+	bot = Bot(token=config.__TOKEN__)
 	print(bot.get_me())
 	
-	updater = Updater(token=config.__TOKEN__)
+	updater = Updater(token=config.__TOKEN__, use_context=True)
 	dispatcher = updater.dispatcher
 	
 	# Assign handlers to commands

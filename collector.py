@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 import tweepy
 import json
 import datetime
+import time
+import logging
 
 class OAuthKeys():
 	
@@ -9,12 +11,13 @@ class OAuthKeys():
 	_inuse = list()
 
 
-	def add(ck, cs, k, s):
+	@classmethod
+	def add(cls, ck, cs, k, s):
 		OAuthKeys._keys.append((ck, cs, k, s))
 		OAuthKeys._inuse.append(False)
 
-
-	def get():
+	@classmethod
+	def get(cls):
 		for i in range(len(OAuthKeys._inuse)):
 			if not OAuthKeys._inuse[i]:
 				OAuthKeys._inuse[i] = True
@@ -22,8 +25,8 @@ class OAuthKeys():
 		
 		return None
 
-
-	def release(key):
+	@classmethod
+	def release(cls, key):
 		for i in range(len(OAuthKeys._keys)):
 			if key == OAuthKeys._keys[i]:
 				OAuthKeys._inuse[i] = False
@@ -31,7 +34,8 @@ class OAuthKeys():
 		
 		return False
 	
-	def from_file(filename):
+	@classmethod
+	def from_file(cls, filename):
 		with open(filename, 'r') as f:
 			for line in f:
 				key = tuple(line.strip().split(';'))
@@ -52,33 +56,41 @@ class Collector(ABC):
 		else:
 			raise Exception("No free credentials")
 		
-		self.api = tweepy.API(self.auth)
+		self.api = tweepy.API(
+			self.auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
 	
 	def __del__(self):
 		OAuthKeys.release(self.credentials)
 
 	def query(self, q):
-		pass
+		return True
 	
 	def dump(self, q, folder="dumps", postfix="standard"):
 		results = self.query(q)
 		
-		with open("{}/{}_{}.{}.json".format(folder, q, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), postfix), "w+") as f:
+		filepath = "{}/{}_{}.{}.json".format(
+			folder, q, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+			postfix)
+		with open(filepath, "w+") as f:
 			json.dump(results, f, indent=2)
 
 
 class StandardAPI(Collector):
 	
-	def query(self, q):
+	def query(self, q, max_tweets=100):
 		results = list()
-		
+
 		if q[0] == "@":
-			for page in tweepy.Cursor(self.api.user_timeline, id=q[1:], tweet_mode="extended").pages():
+			for page in tweepy.Cursor(
+				self.api.user_timeline, id=q[1:],
+				tweet_mode="extended").pages():
 				for tweet in page:
 					results.append(tweet._json)
 				
 		else:
-			for page in tweepy.Cursor(self.api.search, q=q, tweet_mode="extended").pages():
+			print("Querying with {}".format(q))
+			for page in tweepy.Cursor(
+				self.api.search, q=q, tweet_mode="extended").pages():
 				for tweet in page:
 					results.append(tweet._json)
 		
@@ -110,7 +122,7 @@ class StreamingAPI(Collector):
 		self.last_q = q
 		
 		self.streamer = StreamHandler()
-		self.stream = tweepy.Stream(auth = self.api.auth, listener=self.streamer)
+		self.stream = tweepy.Stream(auth=self.api.auth, listener=self.streamer)
 		
 		self.stream.filter(track=[q], is_async=True)
 
@@ -123,12 +135,15 @@ class StreamingAPI(Collector):
 		q = q if q is not None else self.last_q
 		results = self.streamer.results
 		
-		with open("{}/{}_{}.{}.json".format(folder, q, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), postfix), "w+") as f:
+		filepath = "{}/{}_{}.{}.json".format(
+			folder, q, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+			postfix)
+		with open(filepath, "w+") as f:
 			json.dump(results, f, indent=2)
 
 
 
 if __name__ == "__main__":
 	OAuthKeys.from_file("credentials.txt")
-	# ~ standard = StandardAPI()
-	streaming = StreamingAPI()
+	standard = StandardAPI()
+	# streaming = StreamingAPI()

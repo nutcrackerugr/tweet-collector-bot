@@ -1,9 +1,29 @@
 from abc import ABC, abstractmethod
+from multiprocessing import Queue
 import tweepy
 import json
 import datetime
 import time
 import logging
+
+class Task:
+	def __init__(self, task, depth):
+		self.task = task
+		self.depth = depth + 1
+
+class TaskQueue:
+
+    def __init__(self):
+        self.queue = Queue()
+        self.done = set()
+    
+    def add_task(self, task: Task):
+        if task.task == "FINISHED" or task.task not in self.done:
+            self.queue.put(task)
+            self.done.add(task.task)
+    
+    def get_task(self, block = True, timeout = None):
+        return self.queue.get(block=block, timeout=timeout)
 
 class OAuthKeys():
 	
@@ -116,22 +136,59 @@ class StreamHandler(tweepy.StreamListener):
 		if status_code == 420:
 			return False
 
+class ListenerStreamHandler(tweepy.StreamListener):
+	def __init__(self, queue, api=None, limit=0):
+		self.queue = queue
+		self.results = list()
+		self.limit = limit
+		super().__init__(api=api)
+		
+	def on_status(self, status):
+		self.results.append(status._json)
+
+		if hasattr(status, "retweeted_status"):
+			self.queue.add_task(Task(f"tid:{status.retweeted_status.id_str}", 0))
+			self.queue.add_task(Task(f"uid:{status.retweeted_status.user.id_str}", 0))
+		
+		if status.in_reply_to_status_id_str:
+			self.queue.add_task(Task(f"tid:{status.in_reply_to_status_id_str}", 0))
+			self.queue.add_task(Task(f"uid:{status.in_reply_to_user_id_str}", 0))
+		
+		if hasattr(status, "entities") and "urls" in status.entities:
+			for url in status.entities["urls"]:
+				start = url["expanded_url"].find("user_id=")
+
+				if start != -1:
+					self.queue.add_task(Task(f"uid:{url['expanded_url'][start+8:]}", 0))
+
+		if self.limit != 0 and len(self.results) >= self.limit:
+			return False
+		
+	def on_error(self, status_code):
+		if status_code == 420:
+			return False
+
 
 class StreamingAPI(Collector):
-	def __init__(self):
-		self.streamer = None
+	def __init__(self, streamer=None):
+		self.streamer = streamer
 		self.stream = None
 		self.last_q = None
 		super().__init__()
 	
 	
-	def query(self, q, limit=0):
+	def query(self, q, limit=0, is_user=False):
 		self.last_q = q
 		
-		self.streamer = StreamHandler(limit=limit)
+		self.streamer = self.streamer if self.streamer else StreamHandler(limit=limit)
 		self.stream = tweepy.Stream(auth=self.api.auth, listener=self.streamer)
 		
-		self.stream.filter(track=[q], is_async=True)
+		if is_user:
+			self.stream.filter(follow=[q], is_async=True)
+		else:
+			self.stream.filter(track=[q], is_async=True)
+		
+
 
 	
 	def disconnect(self):

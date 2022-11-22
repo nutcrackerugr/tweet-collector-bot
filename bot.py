@@ -5,8 +5,83 @@ import collector
 import config
 import logging
 
+import json
+import datetime
+import time
 
+import tweepy
+
+from multiprocessing import Process
+
+MAX_DEPTH = 3
 streams = []
+queue = None
+task_consumer = None
+
+def task_consumer_worker(queue):
+	finished = False
+	results = list()
+	errors = list()
+
+	credentials = collector.OAuthKeys.get()
+	if credentials:
+		ck, cs, k, s = credentials
+		auth = tweepy.OAuthHandler(ck, cs)
+		auth.set_access_token(k, s)
+	else:
+		raise Exception("No free credentials")
+
+	api = tweepy.API(auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
+
+	while not finished:
+		task = queue.get_task()
+
+		print(f"TASK: {task.task}")
+
+		if task.task == "FINISH":
+			finished = True
+		elif task.depth <= MAX_DEPTH:
+			if task.task[:3] == "tid":
+				try:
+					status = api.get_status(task.task[4:])
+					if status:
+						results.append(status._json)
+
+						if hasattr(status, "retweeted_status"):
+							queue.add_task(collector.Task(f"tid:{status.retweeted_status.id_str}", task.depth))
+							queue.add_task(collector.Task(f"uid:{status.retweeted_status.user.id_str}", task.depth))
+						
+						if status.in_reply_to_status_id_str:
+							queue.add_task(collector.Task(f"tid:{status.in_reply_to_status_id_str}", task.depth))
+							queue.add_task(collector.Task(f"uid:{status.in_reply_to_user_id_str}", task.depth))
+				except Exception as e:
+					print(f"{task.task}: {str(e)}")
+					errors.append(task.task)
+
+			elif task.task[:3] == "uid":
+				try:
+					statuses = api.user_timeline(id=task.task[4:], count=100)
+
+					for status in statuses:
+						results.append(status._json)
+
+						if hasattr(status, "retweeted_status"):
+							queue.add_task(collector.Task(f"tid:{status.retweeted_status.id_str}", task.depth))
+							queue.add_task(collector.Task(f"uid:{status.retweeted_status.user.id_str}", task.depth))
+						
+						if status.in_reply_to_status_id_str:
+							queue.add_task(collector.Task(f"tid:{status.in_reply_to_status_id_str}", task.depth))
+							queue.add_task(collector.Task(f"uid:{status.in_reply_to_user_id_str}", task.depth))
+				except Exception as e:
+					print(f"{task.task}: {str(e)}")
+					errors.append(task.task)
+
+	
+	filepath = "dumps/@CtrlSec_tasks_{}.{}.json".format(
+		datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+		"stream")
+	with open(filepath, "w+") as f:
+		json.dump(results, f, indent=2)
 
 def start(update: Update, context: CallbackContext):
 	if update.message.from_user.id in config.__LIST_OF_USERS__:
@@ -130,8 +205,54 @@ def stop_stream(update: Update, context: CallbackContext):
 			context.bot.send_message(
 				chat_id=update.effective_message.chat_id,
 				text="Malformed command")
-	
 
+
+def monitor_ctrlsec(update: Update, context: CallbackContext):
+	global queue, task_consumer
+
+	if update.message.from_user.id in config.__LIST_OF_USERS__:
+		query = update.message.text.split(" ", maxsplit=2)
+		queue = collector.TaskQueue()
+		task_consumer = Process(target=task_consumer_worker, args=(queue,))
+		task_consumer.start()
+
+		try:
+			stream = collector.StreamingAPI(streamer=collector.ListenerStreamHandler(queue))
+			
+			q = "185731569" #manu3lf
+			stream.query(q, is_user=True)
+			
+			streams.append(("@CtrlSec", stream))
+			context.bot.send_message(
+				chat_id=update.effective_message.chat_id,
+				text="Listening for '@CtrlSec'...")
+			
+		except Exception as e:
+			context.bot.send_message(
+				chat_id=update.effective_message.chat_id,
+				text=str(e))
+
+def stop_monitoring(update: Update, context: CallbackContext):
+	global queue, task_consumer
+
+	if update.message.from_user.id in config.__LIST_OF_USERS__:
+		for key, stream in enumerate(streams):
+			if stream[0] == "@CtrlSec":
+				stream[1].disconnect()
+				streams.pop(key)
+				stream[1].dump("@CtrlSec_monitoring")
+				queue.add_task(collector.Task("FINISH", 0))
+
+				context.bot.send_message(
+					chat_id=update.effective_message.chat_id,
+					text="Attempting gracefully shutdown")
+
+				task_consumer.join(60)
+
+				context.bot.send_message(
+					chat_id=update.effective_message.chat_id,
+					text="Done monitoring")
+				break
 
 if __name__ == "__main__":
 	logging.basicConfig(
@@ -153,6 +274,8 @@ if __name__ == "__main__":
 	dispatcher.add_handler(CommandHandler("stream", stream))
 	dispatcher.add_handler(CommandHandler("list", list_streams))
 	dispatcher.add_handler(CommandHandler("stop", stop_stream))
+	dispatcher.add_handler(CommandHandler("monitor", monitor_ctrlsec))
+	dispatcher.add_handler(CommandHandler("stop_monitoring", stop_monitoring))
 	
 	updater.start_polling()
 	

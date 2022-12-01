@@ -94,6 +94,8 @@ def start(update: Update, context: CallbackContext):
 			" de streams activos\n  /stop n - Parar stream n".format(
 				update.effective_user.first_name, 
 				update.effective_user.id))
+	else:
+		print(f"Unauthorized user: {update.message.from_user.id}")
 
 
 def query(update: Update, context: CallbackContext):

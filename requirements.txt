@@ -1,2 +1,2 @@
 python-telegram-bot
-tweepy
+tweepy==3.10.0
